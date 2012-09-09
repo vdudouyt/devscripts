@@ -1,0 +1,56 @@
+#!/usr/bin/perl
+# Parses Wireshark PDML file for USB transactions and prints the conversation in human-readable format
+use strict;
+use XML::LibXML;
+use Getopt::Long;
+
+# Parsing command-line
+my $file = shift(@ARGV);
+my $device_address = shift(@ARGV);
+my ($arg_out, $arg_comments);
+my $getopt_result = Getopt::Long::GetOptions( "out=s" => \$arg_out,
+					      "comments" => \$arg_comments);
+$arg_out ||= 'text';
+
+# Loading PDML
+my $xml = XML::LibXML->load_xml(location => $file);
+my $root = $xml->getDocumentElement();
+
+my @packets = $root->findnodes('packet/proto[@name="usb"]/field[@name="usb.device_address" and @showname="Device: '. $device_address. '"]');
+foreach my $device_address(@packets) {
+	my $proto = $device_address->parentNode;
+	my $capdata = $proto->findnodes('field[@name="usb.capdata"]')->shift;
+	my $endpoint = $proto->findnodes('field[@name="usb.endpoint_number"]')->shift;
+	my $endpoint_value = $endpoint->getAttribute('value');
+	#print "Endpoint: ", $endpoint_value, "\n";
+
+	next if !$capdata;
+	my $direction = ord(pack("H8",$endpoint_value)) & 0x80 ? "IN" : "OUT";
+	my $data = $capdata->getAttribute('value');
+	my $data_length = length($data) / 2;
+
+	if($arg_out eq 'text') {
+		print $direction, ':', $data, "\n";
+	} elsif($arg_out eq 'c') {
+		if($data_length > 16) {
+			print "// $direction $data_length bytes ommited\n";
+			next;
+		}
+		my $data_stripped = $data;
+		$data_stripped =~ s/(00)*$//;
+		my $data_stripped_length = length($data_stripped) / 2;
+		my @c_args;
+		while($data_stripped =~ s/(..)//) {
+			push(@c_args, "0x$1");
+		}
+		my $c_data = join ', ', @c_args;
+		if($direction eq 'OUT') {
+			print "stlink_send_message(context, $data_stripped_length, $c_data);\n"
+		} else {
+			print "stlink_read1(context, $data_length);";
+			print " // $data" if $arg_comments;
+			print "\n";
+		}
+	}
+}
+
