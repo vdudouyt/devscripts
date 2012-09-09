@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+# Parses linker output and generates the missing dependencies list
+# Sample usage:
+# make 2>&1|parse_linker_errors
+# gcc *.o 2>&1|parse_linker_errors ../project/tags
+
+use strict;
+
+sub parseTags {
+	my ($fn) = @_;
+	my $ret = {};
+	open FILE, $fn || die("Couldn't open file: $fn");
+	while(my $line = <FILE>) {
+		my @chunks = split /\s+/, $line;
+		$ret->{$chunks[0]} = {source => $chunks[1]}
+			if $chunks[1];
+	}
+	close FILE;
+	return($ret);
+}
+
+my ($tags_file) = @ARGV;
+$tags_file ||= 'tags';
+my $tags = &parseTags($tags_file);
+
+while(my $line = <STDIN>) {
+	my ($symbol) = $line =~ /undefined reference to `(.*)'/;
+	next if (!$symbol);
+	if($tags->{$symbol}) {
+		$tags->{$symbol}->{select} = 1;
+	} else {
+		print "Unknown symbol: $symbol\n";
+	}
+}
+
+foreach(grep {$tags->{$_}->{select}} keys(%$tags)) {
+	print "$_: $tags->{$_}->{source}\n";
+}

@@ -1,4 +1,4 @@
 devscripts
 ==========
 
-Various helper scripts for development purposes
+Helper scripts for development purposes
