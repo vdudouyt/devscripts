@@ -11,6 +11,7 @@ options:
 	--format=[text|c]	Output format
 	--print-comments	Print the data came (assuming --format=c)
 	--print-timing		Print the relative time for each message
+	--omit=<n>	Omit the messages that exceeds the specified size
 OUT
 ;
 	exit(-1);
@@ -20,10 +21,11 @@ sub main {
 	# Parsing command-line
 	my $file = shift(@ARGV);
 	my $device_address = shift(@ARGV);
-	my ($arg_format, $arg_print_comments, $arg_print_timing);
+	my ($arg_format, $arg_print_comments, $arg_print_timing, $arg_omit);
 	my $getopt_result = Getopt::Long::GetOptions( "format=s" => \$arg_format,
 						      "print-comments" => \$arg_print_comments,
 						      "print-timing" => \$arg_print_timing,
+						      "omit=s" => \$arg_omit,
 						      );
 	print_help_and_exit()
 		if !$getopt_result;
@@ -57,8 +59,8 @@ sub main {
 			print " # $time_rel" if $arg_print_timing;
 			print "\n";
 		} elsif($arg_format eq 'c') {
-			if($data_length > 16) {
-				print "// $direction $data_length bytes ommited\n";
+			if($arg_omit && $data_length > $arg_omit) {
+				print "// $direction $data_length bytes omitted\n";
 				next;
 			}
 			my $data_stripped = $data;
