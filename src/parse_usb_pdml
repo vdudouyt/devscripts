@@ -1,56 +1,82 @@
 #!/usr/bin/perl
-# Parses Wireshark PDML file for USB transactions and prints the conversation in human-readable format
+# Wireshark PDML extractions and reports
 use strict;
 use XML::LibXML;
 use Getopt::Long;
 
-# Parsing command-line
-my $file = shift(@ARGV);
-my $device_address = shift(@ARGV);
-my ($arg_out, $arg_comments);
-my $getopt_result = Getopt::Long::GetOptions( "out=s" => \$arg_out,
-					      "comments" => \$arg_comments);
-$arg_out ||= 'text';
+sub print_help_and_exit {
+	print STDERR <<OUT
+Usage: $0 <filename> <device_id> [options]
+options:
+	--format=[text|c]	Output format
+	--print-comments	Print the data came (assuming --format=c)
+OUT
+;
+	exit(-1);
+}
 
-# Loading PDML
-my $xml = XML::LibXML->load_xml(location => $file);
-my $root = $xml->getDocumentElement();
-
-my @packets = $root->findnodes('packet/proto[@name="usb"]/field[@name="usb.device_address" and @showname="Device: '. $device_address. '"]');
-foreach my $device_address(@packets) {
-	my $proto = $device_address->parentNode;
-	my $capdata = $proto->findnodes('field[@name="usb.capdata"]')->shift;
-	my $endpoint = $proto->findnodes('field[@name="usb.endpoint_number"]')->shift;
-	my $endpoint_value = $endpoint->getAttribute('value');
-	#print "Endpoint: ", $endpoint_value, "\n";
-
-	next if !$capdata;
-	my $direction = ord(pack("H8",$endpoint_value)) & 0x80 ? "IN" : "OUT";
-	my $data = $capdata->getAttribute('value');
-	my $data_length = length($data) / 2;
-
-	if($arg_out eq 'text') {
-		print $direction, ':', $data, "\n";
-	} elsif($arg_out eq 'c') {
-		if($data_length > 16) {
-			print "// $direction $data_length bytes ommited\n";
-			next;
-		}
-		my $data_stripped = $data;
-		$data_stripped =~ s/(00)*$//;
-		my $data_stripped_length = length($data_stripped) / 2;
-		my @c_args;
-		while($data_stripped =~ s/(..)//) {
-			push(@c_args, "0x$1");
-		}
-		my $c_data = join ', ', @c_args;
-		if($direction eq 'OUT') {
-			print "stlink_send_message(context, $data_stripped_length, $c_data);\n"
-		} else {
-			print "stlink_read1(context, $data_length);";
-			print " // $data" if $arg_comments;
+sub main {
+	# Parsing command-line
+	my $file = shift(@ARGV);
+	my $device_address = shift(@ARGV);
+	my ($arg_format, $arg_print_comments);
+	my $getopt_result = Getopt::Long::GetOptions( "format=s" => \$arg_format,
+						      "print-comments" => \$arg_print_comments,
+						      );
+	print_help_and_exit()
+		if !$getopt_result;
+	$arg_format ||= 'text';
+	
+	# Loading PDML
+	my $xml = XML::LibXML->load_xml(location => $file);
+	my $root = $xml->getDocumentElement();
+	
+	my @packets = $root->findnodes('packet/proto[@name="usb"]/field[@name="usb.device_address" and @showname="Device: '. $device_address. '"]');
+	my $last_timestamp = 0; # tracking $time_rel
+	foreach my $device_address(@packets) {
+		my $proto = $device_address->parentNode;
+		my $capdata = $proto->findnodes('field[@name="usb.capdata"]')->shift;
+		my $endpoint = $proto->findnodes('field[@name="usb.endpoint_number"]')->shift;
+		my $ts_sec = $proto->findnodes('field[@name="usb.urb_ts_sec"]')->shift;
+		my $ts_usec = $proto->findnodes('field[@name="usb.urb_ts_usec"]')->shift;
+		my $endpoint_value = $endpoint->getAttribute('value');
+		#print "Endpoint: ", $endpoint_value, "\n";
+	
+		next if !$capdata;
+		my $direction = ord(pack("H8",$endpoint_value)) & 0x80 ? "IN" : "OUT";
+		my $data = $capdata->getAttribute('value');
+		my $data_length = length($data) / 2; # Data is presented in the HEX format
+		my $time_abs = $ts_sec->getAttribute('show') + $ts_usec->getAttribute('show') / 10**6;
+		my $time_rel = $time_abs - $last_timestamp;
+		$last_timestamp = $time_abs;
+	
+		if($arg_format eq 'text') {
+			print $direction, ':', $data;
 			print "\n";
+		} elsif($arg_format eq 'c') {
+			if($data_length > 16) {
+				print "// $direction $data_length bytes ommited\n";
+				next;
+			}
+			my $data_stripped = $data;
+			$data_stripped =~ s/(00)*$//;
+			my $data_stripped_length = length($data_stripped) / 2;
+			my @c_args;
+			while($data_stripped =~ s/(..)//) {
+				push(@c_args, "0x$1");
+			}
+			my $c_data = join ', ', @c_args;
+			if($direction eq 'OUT') {
+				print "stlink_send_message(context, $data_stripped_length, $c_data);\n"
+			} else {
+				print "stlink_read1(context, $data_length);";
+				print " // $data" if $arg_print_comments;
+				print "\n";
+			}
 		}
 	}
 }
 
+print_help_and_exit()
+	if(!@ARGV);
+main();
