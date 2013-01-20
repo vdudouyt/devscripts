@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h> // pow()
 #include <assert.h>
 #include <libusb.h>
 
@@ -22,6 +23,7 @@ typedef struct urb_s {
 	} direction;
 	unsigned char data[2056];
 	int data_size;
+	long double timing; // secs since the previous URB
 } urb_t;
 
 void usb_init(unsigned int vid, unsigned int pid) {
@@ -63,6 +65,7 @@ int trim_whitespace(char *str) {
 int read_urb(char *line, urb_t *out) {
 	char str_out[] = "OUT:";
 	char str_in[] = "IN:";
+	memset(out, 0, sizeof(urb_t));
 	if(!memcmp(line, str_out, strlen(str_out))) {
 		out->direction = OUT;
 		line += strlen(str_out);
@@ -76,6 +79,11 @@ int read_urb(char *line, urb_t *out) {
 	if(comment) {
 		comment[0] = '\0'; // Split from line
 		comment++;
+		// Strip leading whitespace
+		while(comment[0] && isspace(comment[0]))
+			comment++;
+			int r = sscanf(comment, "%Lf", &(out->timing));
+			assert(r);
 	}
 	trim_whitespace(line);
 	assert(strlen(line) % 2 == 0); // Total nibbles count should be even
@@ -123,10 +131,15 @@ int main(int argc, char **argv) {
 	FILE *file = fopen ( argv[1], "r" );
 	assert(file);
 	urb_t urb;
+	unsigned int nth = 0;
 	while ( fgets ( line, sizeof line, file ) != NULL ) {
 		// Reading line-by-line
 		if(read_urb(line, &urb)) {
 			assert(urb.type == BULK); // The only one that's currently supported
+			if(!nth && urb.timing) {
+				int time = urb.timing*pow(10,6);
+				usleep(time);
+			}
 			switch(urb.direction) {
 				case OUT:
 					printf("out length: %d\n", urb.data_size);
@@ -149,6 +162,7 @@ int main(int argc, char **argv) {
 					break;
 			}
 		}
+		nth++;
 	}
 
 	libusb_close(dev_handle);
