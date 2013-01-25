@@ -11,6 +11,7 @@ libusb_device_handle *dev_handle;
 libusb_context *ctx;
 
 typedef struct urb_s {
+	int initialized : 1; // set by read_urb on successful read
 	enum {
 		CONTROL,
 		INTERRUPT,
@@ -89,6 +90,7 @@ int read_urb(char *line, urb_t *out) {
 	assert(strlen(line) % 2 == 0); // Total nibbles count should be even
 	out->type = BULK; // The only one that's currently supported
 	out->data_size = hex_to_buf(line, out->data);
+	out->initialized = 1;
 	return(1);
 }
 
@@ -130,23 +132,26 @@ int main(int argc, char **argv) {
 	int r, actual;
 	FILE *file = fopen ( argv[1], "r" );
 	assert(file);
-	urb_t urb;
-	unsigned int nth = 0;
-	while ( fgets ( line, sizeof line, file ) != NULL ) {
-		// Reading line-by-line
-		if(read_urb(line, &urb)) {
-			assert(urb.type == BULK); // The only one that's currently supported
-			if(!nth && urb.timing) {
-				int time = urb.timing*pow(10,6);
+	urb_t previous, current;
+	memset(&previous, 0, sizeof(urb_t));
+	char *read_success = NULL;
+	do {
+		read_success = fgets ( line, sizeof line, file ); // Reading line-by-line
+		memset(&current, 0, sizeof(urb_t));
+		read_urb(line, &current);
+		if(previous.initialized) {
+			assert(previous.type == BULK); // The only one that's currently supported
+			if(current.timing) {
+				int time = current.timing*pow(10,6);
 				usleep(time);
 			}
-			switch(urb.direction) {
+			switch(previous.direction) {
 				case OUT:
-					printf("out length: %d\n", urb.data_size);
+					printf("out length: %d\n", previous.data_size);
 					r = libusb_bulk_transfer(dev_handle,
 						(2 | LIBUSB_ENDPOINT_OUT),
-						urb.data,
-						urb.data_size,
+						previous.data,
+						previous.data_size,
 						&actual,
 						0);
 					assert(r == 0);
@@ -154,16 +159,17 @@ int main(int argc, char **argv) {
 				case IN:
 					r = libusb_bulk_transfer(dev_handle,
 						(1 | LIBUSB_ENDPOINT_IN),
-						urb.data,
-						urb.data_size,
+						previous.data,
+						previous.data_size,
 						&actual,
 						0);
 					assert(r == 0);
 					break;
 			}
 		}
-		nth++;
-	}
+		// Send on the next iteration
+		memcpy(&previous, &current, sizeof(urb_t));
+	} while ( read_success );
 
 	libusb_close(dev_handle);
 }
